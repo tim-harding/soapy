@@ -1,32 +1,6 @@
 //! Soapy makes it simple to work with structure-of-arrays memory layout. What `Vec<T>`
 //! is to array-of-structures (AoS), `Soa<T>` is to structure-of-arrays (SoA).
 //!
-//! # Example
-//!
-//! ```
-//!  use soapy::{Soa, Soapy};
-//! [derive(Soapy, Debug, Clone, Copy, PartialEq)]
-//! struct Example {
-//!     foo: u8,
-//!     bar: u16,
-//! }
-//!
-//! let elements = [Example { foo: 1, bar: 2 }, Example { foo: 3, bar: 4 }];
-//! let mut soa: Soa<_> = elements.into_iter().collect();
-//!
-//! // The index operator is not possible, but we can use nth:
-//! *soa.nth_mut(0).foo += 10;
-//!
-//! // We can get the fields as slices as well:
-//! let slices = soa.slices();
-//! assert_eq!(slices.foo, &[11, 3][..]);
-//! assert_eq!(slices.bar, &[2, 4][..]);
-//!
-//! for (actual, expected) in soa.iter().zip(elements.iter()) {
-//!     assert_eq!(&expected.bar, actual.bar);
-//! }
-//! ```
-//!
 //! # What is SoA?
 //!
 //! The following types illustrate the difference between AoS and Soa:
@@ -81,7 +55,6 @@
 //! struct, you should consider whether to include them in the `pub` items of
 //! your module.
 
-mod index;
 mod into_iter;
 mod iter;
 mod iter_mut;
@@ -418,37 +391,6 @@ mod tests {
         soa.hash(&mut actual);
 
         assert_eq!(actual.finish(), expected.finish());
-    }
-
-    #[test]
-    pub fn get_range() {
-        let soa: Soa<_> = ABCDE.into();
-        let slices = soa.get(1..3).unwrap();
-        for (&expected, (foo, (bar, baz))) in ABCDE[1..3].iter().zip(
-            slices
-                .foo
-                .iter()
-                .zip(slices.bar.iter().zip(slices.baz.iter())),
-        ) {
-            let actual = El {
-                foo: *foo,
-                bar: *bar,
-                baz: *baz,
-            };
-            assert_eq!(actual, expected);
-        }
-    }
-
-    #[test]
-    pub fn get_index() {
-        let soa: Soa<_> = ABCDE.into();
-        let actual = soa.get(2).unwrap();
-        let actual = El {
-            foo: *actual.foo,
-            bar: *actual.bar,
-            baz: *actual.baz,
-        };
-        assert_eq!(actual, ABCDE[2]);
     }
 
     #[test]

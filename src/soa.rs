@@ -1,12 +1,3 @@
-// TODO:
-// - retain / retain_mut
-// - try_reserve / try_reserve_exact
-// - dedup_by / dedup_by_key
-// - sort / sort_unstable / ...
-// - binary_search
-//
-// - Document panics for reallocating methods
-
 use soapy_shared::{RawSoa, Soapy};
 use std::{
     cmp::Ordering,
@@ -16,7 +7,7 @@ use std::{
     ops::{ControlFlow, Deref},
 };
 
-use crate::{index::SoaIndex, IntoIter, Iter, IterMut};
+use crate::{IntoIter, Iter, IterMut};
 
 pub struct Soa<T>
 where
@@ -355,15 +346,6 @@ where
         while self.pop().is_some() {}
     }
 
-    /// Returns a reference to an element or subslice depending on the type of
-    /// index.
-    pub fn get<I>(&self, index: I) -> Option<I::Output<'_>>
-    where
-        I: SoaIndex<T>,
-    {
-        index.get(self)
-    }
-
     /// Returns a clone of the element at the given index.
     ///
     /// # Panics
@@ -392,20 +374,6 @@ where
         unsafe { self.raw.get_ref(index) }
     }
 
-    /// Returns slices for each of the SoA fields.
-    pub fn slices(&self) -> <T::RawSoa as RawSoa<T>>::Slices<'_> {
-        unsafe { self.raw.slices(0, self.len) }
-    }
-
-    /// Returns a mutable reference to an element or subslice depending on the
-    /// type of index.
-    pub fn get_mut<I>(&mut self, index: I) -> Option<I::OutputMut<'_>>
-    where
-        I: SoaIndex<T>,
-    {
-        index.get_mut(self)
-    }
-
     /// Returns a reference to the element at the given index.
     ///
     /// # Panics
@@ -416,11 +384,6 @@ where
             panic!("index out of bounds");
         }
         unsafe { self.raw.get_mut(index) }
-    }
-
-    /// Returns mutable slices for each of the SoA fields.
-    pub fn slices_mut(&mut self) -> <T::RawSoa as RawSoa<T>>::SlicesMut<'_> {
-        unsafe { self.raw.slices_mut(0, self.len) }
     }
 
     /// Swaps the position of two elements.

@@ -219,8 +219,6 @@ fn fields_struct(
 
         #[automatically_derived]
         impl ::soapy_shared::RawSoa<#ident> for #raw {
-            type Slices<'a> = #slices<'a> where Self: 'a;
-            type SlicesMut<'a> = #slices_mut<'a> where Self: 'a;
             type Ref<'a> = #item_ref<'a> where Self: 'a;
             type RefMut<'a> = #item_ref_mut<'a> where Self: 'a;
 
@@ -228,32 +226,6 @@ fn fields_struct(
             fn dangling() -> Self {
                 Self {
                     #(#ident_all: ::std::ptr::NonNull::dangling(),)*
-                }
-            }
-
-            #[inline]
-            unsafe fn slices(&self, start: usize, end: usize) -> Self::Slices<'_> {
-                let len = end - start;
-                #slices {
-                    #(
-                    #ident_all: ::std::slice::from_raw_parts(
-                        self.#ident_all.as_ptr().add(start),
-                        len,
-                    ),
-                    )*
-                }
-            }
-
-            #[inline]
-            unsafe fn slices_mut(&mut self, start: usize, end: usize) -> Self::SlicesMut<'_> {
-                let len = end - start;
-                #slices_mut {
-                    #(
-                    #ident_all: ::std::slice::from_raw_parts_mut(
-                        self.#ident_all.as_ptr().add(start),
-                        len,
-                    ),
-                    )*
                 }
             }
 
@@ -372,8 +344,6 @@ fn zst_struct(ident: Ident, vis: Visibility, kind: ZstKind) -> Result<TokenStrea
 
         #[automatically_derived]
         impl ::soapy_shared::RawSoa<#ident> for #raw {
-            type Slices<'a> = ();
-            type SlicesMut<'a> = ();
             type Ref<'a> = #ident;
             type RefMut<'a> = #ident;
 
@@ -381,10 +351,6 @@ fn zst_struct(ident: Ident, vis: Visibility, kind: ZstKind) -> Result<TokenStrea
             fn dangling() -> Self { Self }
             #[inline]
             fn as_ptr(self) -> *mut u8 { ::std::ptr::null::<u8>() as *mut _ }
-            #[inline]
-            unsafe fn slices(&self, start: usize, end: usize) -> Self::Slices<'_> { () }
-            #[inline]
-            unsafe fn slices_mut(&mut self, start: usize, end: usize) -> Self::SlicesMut<'_> { () }
             #[inline]
             unsafe fn from_parts(ptr: *mut u8, capacity: usize) -> Self { Self }
             #[inline]

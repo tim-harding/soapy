@@ -23,18 +23,6 @@ pub trait Soapy: Sized {
 /// - the same value as was used for `new_capacity` in previous calls
 /// to [`RawSoa::realloc_grow`] and [`RawSoa::realloc_shrink`]
 pub trait RawSoa<T>: Copy + Clone {
-    /// For each field with type `F` in `T`, `Slices` has a field with type
-    /// `&[F]`
-    type Slices<'a>
-    where
-        Self: 'a;
-
-    /// For each field with type `F` in `T`, `SlicesMut` has a field with type
-    /// `&mut [F]`
-    type SlicesMut<'a>
-    where
-        Self: 'a;
-
     /// For each field with type `F` in `T`, `Ref` has a field with type
     /// `&F`
     type Ref<'a>
@@ -50,28 +38,6 @@ pub trait RawSoa<T>: Copy + Clone {
     /// Creates a `Self` with dangling pointers for all its fields and without
     /// allocating memory.
     fn dangling() -> Self;
-
-    /// Constructs safe, immutable slices of the arrays managed by `Self` with
-    /// the range `start..end`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that
-    /// - `start <= end`
-    /// - `start <= PREV_LEN`
-    /// - `end <= PREV_LEN`
-    unsafe fn slices(&self, start: usize, end: usize) -> Self::Slices<'_>;
-
-    /// Constructs safe, mutable slices of the arrays managed by `Self` with the
-    /// range `start..end`.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that
-    /// - `start <= end`
-    /// - `start <= PREV_LEN`
-    /// - `end <= PREV_LEN`
-    unsafe fn slices_mut(&mut self, start: usize, end: usize) -> Self::SlicesMut<'_>;
 
     /// Returns the pointer that contains the allocated capacity.
     ///
