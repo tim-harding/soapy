@@ -1,11 +1,11 @@
-use soapy_shared::{RawSoa, Soapy};
+use soapy_shared::{SoaSlice, Soapy};
 use std::mem::size_of;
 
 pub struct IntoIter<T>
 where
     T: Soapy,
 {
-    pub(crate) raw: T::RawSoa,
+    pub(crate) raw: T::SoaSlice,
     pub(crate) cap: usize,
     pub(crate) start: usize,
     pub(crate) end: usize,

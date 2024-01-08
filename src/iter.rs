@@ -1,11 +1,11 @@
-use soapy_shared::{RawSoa, Soapy};
+use soapy_shared::{SoaSlice, Soapy};
 use std::marker::PhantomData;
 
 pub struct Iter<'a, T: 'a>
 where
     T: Soapy,
 {
-    pub(crate) raw: T::RawSoa,
+    pub(crate) raw: T::SoaSlice,
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) _marker: PhantomData<&'a T>,
@@ -15,7 +15,7 @@ impl<'a, T> Iterator for Iter<'a, T>
 where
     T: Soapy,
 {
-    type Item = <<T as Soapy>::RawSoa as RawSoa<T>>::Ref<'a>;
+    type Item = <<T as Soapy>::SoaSlice as SoaSlice<T>>::Ref<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.start >= self.end {

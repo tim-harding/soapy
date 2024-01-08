@@ -1,10 +1,12 @@
-use soapy_shared::{RawSoa, Soapy};
+use soapy_shared::{SoaSlice, Soapy};
 use std::{
+    alloc::{alloc, handle_alloc_error, Layout},
     cmp::Ordering,
     fmt::{self, Formatter},
     marker::PhantomData,
     mem::{size_of, ManuallyDrop},
     ops::{ControlFlow, Deref},
+    ptr::NonNull,
 };
 
 use crate::{IntoIter, Iter, IterMut};
@@ -13,9 +15,8 @@ pub struct Soa<T>
 where
     T: Soapy,
 {
-    pub(crate) len: usize,
     pub(crate) cap: usize,
-    pub(crate) raw: T::RawSoa,
+    pub(crate) raw: NonNull<T::SoaSlice>,
 }
 
 unsafe impl<T> Send for Soa<T> where T: Send + Soapy {}
@@ -27,14 +28,28 @@ where
 {
     const SMALL_CAPACITY: usize = 4;
 
+    fn alloc(capacity: usize) -> NonNull<T::SoaSlice> {
+        let (layout, offsets) = <T::SoaSlice as SoaSlice<T>>::layout_and_offsets(capacity).unwrap();
+        let ptr = unsafe { alloc(layout) };
+        if ptr.is_null() {
+            handle_alloc_error(layout);
+        }
+        for (i, &offset) in offsets.into_iter().enumerate() {
+            unsafe {
+                *(ptr as *mut NonNull<u8>).add(i).as_mut().unwrap_unchecked() =
+                    NonNull::new_unchecked(ptr.add(offset));
+            }
+        }
+        unsafe { NonNull::new_unchecked(ptr as *mut T::SoaSlice) }
+    }
+
     /// Constructs a new, empty `Soa<T>`.
     ///
     /// The container will not allocate until elements are pushed onto it.
     pub fn new() -> Self {
         Self {
-            len: 0,
             cap: if size_of::<T>() == 0 { usize::MAX } else { 0 },
-            raw: T::RawSoa::dangling(),
+            raw: NonNull::dangling(),
         }
     }
 
@@ -52,15 +67,13 @@ where
             capacity => {
                 if size_of::<T>() == 0 {
                     Self {
-                        len: 0,
                         cap: usize::MAX,
-                        raw: T::RawSoa::dangling(),
+                        raw: NonNull::dangling(),
                     }
                 } else {
                     Self {
-                        len: 0,
                         cap: capacity,
-                        raw: unsafe { T::RawSoa::alloc(capacity) },
+                        raw: Self::alloc(capacity),
                     }
                 }
             }
@@ -334,7 +347,7 @@ where
     /// # Panics
     ///
     /// Panics if `index >= len`.
-    pub fn nth(&self, index: usize) -> <T::RawSoa as RawSoa<T>>::Ref<'_> {
+    pub fn nth(&self, index: usize) -> <T::SoaSlice as SoaSlice<T>>::Ref<'_> {
         if index >= self.len {
             panic!("index out of bounds");
         }
@@ -346,7 +359,7 @@ where
     /// # Panics
     ///
     /// Panics if `index >= len`.
-    pub fn nth_mut(&mut self, index: usize) -> <T::RawSoa as RawSoa<T>>::RefMut<'_> {
+    pub fn nth_mut(&mut self, index: usize) -> <T::SoaSlice as SoaSlice<T>>::RefMut<'_> {
         if index >= self.len {
             panic!("index out of bounds");
         }
@@ -650,3 +663,51 @@ where
         self.for_each(|item| item.hash(state));
     }
 }
+
+// #[inline]
+// unsafe fn alloc(capacity: usize) -> Self {
+//     let (new_layout, new_offsets) = Self::layout_and_offsets(capacity);
+//     let ptr = ::std::alloc::alloc(new_layout);
+//     assert_ne!(ptr as *const u8, ::std::ptr::null());
+//     Self::with_offsets(ptr, new_offsets)
+// }
+//
+// #[inline]
+// unsafe fn realloc_grow(&mut self, old_capacity: usize, new_capacity: usize, length: usize) {
+//     let (new_layout, new_offsets) = Self::layout_and_offsets(new_capacity);
+//     let (old_layout, old_offsets) = Self::layout_and_offsets(old_capacity);
+//     // Grow allocation first
+//     let ptr = self.#ident_head.as_ptr() as *mut u8;
+//     let ptr = ::std::alloc::realloc(ptr, old_layout, new_layout.size());
+//     assert_ne!(ptr as *const u8, ::std::ptr::null());
+//     // Pointer may have moved, can't reuse self
+//     let old = Self::with_offsets(ptr, old_offsets);
+//     let new = Self::with_offsets(ptr, new_offsets);
+//     // Copy do destination in reverse order to avoid
+//     // overwriting data
+//     #(::std::ptr::copy(old.#ident_rev.as_ptr(), new.#ident_rev.as_ptr(), length);)*
+//     *self = new;
+// }
+//
+// #[inline]
+// unsafe fn realloc_shrink(&mut self, old_capacity: usize, new_capacity: usize, length: usize) {
+//     let (old_layout, _) = Self::layout_and_offsets(old_capacity);
+//     let (new_layout, new_offsets) = Self::layout_and_offsets(new_capacity);
+//     // Move data before reallocating as some data
+//     // may be past the end of the new allocation.
+//     // Copy from front to back to avoid overwriting data.
+//     let ptr = self.#ident_head.as_ptr() as *mut u8;
+//     let dst = Self::with_offsets(ptr, new_offsets);
+//     #(::std::ptr::copy(self.#ident_all.as_ptr(), dst.#ident_all.as_ptr(), length);)*
+//     let ptr = ::std::alloc::realloc(ptr, old_layout, new_layout.size());
+//     assert_ne!(ptr as *const u8, ::std::ptr::null());
+//     // Pointer may have moved, can't reuse dst
+//     *self = Self::with_offsets(ptr, new_offsets);
+// }
+//
+// #[inline]
+// unsafe fn dealloc(self, old_capacity: usize) {
+//     let (layout, _) = Self::layout_and_offsets(old_capacity);
+//     ::std::alloc::dealloc(self.#ident_head.as_ptr() as *mut u8, layout);
+// }
+//

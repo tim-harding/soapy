@@ -1,10 +1,7 @@
-pub trait Soapy: Sized {
-    type RawSoa: RawSoa<Self>;
-}
+use std::alloc::{Layout, LayoutError};
 
-pub struct Field {
-    pub size: usize,
-    pub alignment: usize,
+pub trait Soapy: Sized {
+    type SoaSlice: SoaSlice<Self>;
 }
 
 /// A low-level utility providing fundamental operations needed by `Soa<T>`
@@ -27,9 +24,7 @@ pub struct Field {
 /// made, or
 /// - the same value as was used for `new_capacity` in previous calls
 /// to [`RawSoa::realloc_grow`] and [`RawSoa::realloc_shrink`]
-pub unsafe trait RawSoa<T>: Copy + Clone {
-    const FIELDS: &'static [Field];
-
+pub unsafe trait SoaSlice<T>: Copy + Clone {
     /// For each field with type `F` in `T`, `Ref` has a field with type
     /// `&F`
     type Ref<'a>
@@ -42,59 +37,7 @@ pub unsafe trait RawSoa<T>: Copy + Clone {
     where
         Self: 'a;
 
-    /// Creates a `Self` with dangling pointers for all its fields and without
-    /// allocating memory.
-    fn dangling() -> Self;
-
-    /// Allocates room for `capacity` elements.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that
-    ///
-    /// - `size_of::<T>() > 0`
-    /// - `capacity > 0`
-    /// - `PREV_CAP == 0` (Otherwise use [`RawSoa::realloc_grow`])
-    unsafe fn alloc(capacity: usize) -> Self;
-
-    /// Grows the allocation with room for `old_capacity` elements to fit
-    /// `new_capacity` elements and moves `length` number of array elements to
-    /// their new locations.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that
-    ///
-    /// - `size_of::<T>() > 0`
-    /// - `new_capacity > old_capacity`
-    /// - `length <= old_capacity`
-    /// - `old_capacity > 0` (Otherwise use [`RawSoa::alloc`])
-    unsafe fn realloc_grow(&mut self, old_capacity: usize, new_capacity: usize, length: usize);
-
-    /// Shrinks the allocation with room for `old_capacity` elements to fit
-    /// `new_capacity` elements and moves `length` number of array elements to
-    /// their new locations.
-    ///
-    /// # Safety
-    ///
-    /// The caller must ensure that
-    ///
-    /// - `size_of::<T>() > 0`
-    /// - `new_capacity < old_capacity`
-    /// - `length <= new_capacity`
-    /// - `old_capacity > 0` (Otherwise use [`RawSoa::dealloc`])
-    unsafe fn realloc_shrink(&mut self, old_capacity: usize, new_capacity: usize, length: usize);
-
-    /// Deallocates the allocation with room for `capacity` elements. The state
-    /// after calling this method is equivalent to [`RawSoa::dangling`].
-    ///
-    /// # Safety
-    ///
-    /// `Self` no longer valid after calling this function. The caller must ensure that
-    ///
-    /// - `size_of::<T>() > 0`
-    /// - `old_capacity > 0`
-    unsafe fn dealloc(self, old_capacity: usize);
+    fn layout_and_offsets(capacity: usize) -> Result<(Layout, &'static [usize]), LayoutError>;
 
     /// Copies `count` elements from `src` index to `dst` index in each of the
     /// arrays.
