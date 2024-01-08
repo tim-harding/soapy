@@ -84,39 +84,6 @@ where
         self.cap
     }
 
-    /// Decomposes a `Soa<T>` into its raw components.
-    ///
-    /// Returns the raw pointer to the underlying data, the length of the vector (in
-    /// elements), and the allocated capacity of the data (in elements). These
-    /// are the same arguments in the same order as the arguments to
-    /// [`Soa::from_raw_parts`].
-    ///
-    /// After calling this function, the caller is responsible for the memory
-    /// previously managed by the `Soa`. The only way to do this is to convert the
-    /// raw pointer, length, and capacity back into a Vec with the
-    /// [`Soa::from_raw_parts`] function, allowing the destructor to perform the cleanup.
-    pub fn into_raw_parts(self) -> (*mut u8, usize, usize) {
-        let Self { len, cap, raw } = self;
-        (raw.as_ptr(), len, cap)
-    }
-
-    /// Creates a `Soa<T>` from a pointer, a length, and a capacity.
-    ///
-    /// # Safety
-    ///
-    /// This is highly unsafe due to the number of invariants that aren't
-    /// checked. Given that many of these invariants are private implementation
-    /// details of [`RawSoa`], it is better not to uphold them manually. Rather,
-    /// it only valid to call this method with the output of a previous call to
-    /// [`Soa::into_raw_parts`].
-    pub unsafe fn from_raw_parts(ptr: *mut u8, length: usize, capacity: usize) -> Self {
-        Self {
-            len: length,
-            cap: capacity,
-            raw: T::RawSoa::from_parts(ptr, capacity),
-        }
-    }
-
     /// Appends an element to the back of a collection.
     pub fn push(&mut self, element: T) {
         self.maybe_grow();

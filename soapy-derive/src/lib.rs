@@ -230,17 +230,6 @@ fn fields_struct(
             }
 
             #[inline]
-            fn as_ptr(self) -> *mut u8 {
-                self.#ident_head.as_ptr() as *mut u8
-            }
-
-            #[inline]
-            unsafe fn from_parts(ptr: *mut u8, capacity: usize) -> Self {
-                let (_, offsets) = Self::layout_and_offsets(capacity);
-                Self::with_offsets(ptr, offsets)
-            }
-
-            #[inline]
             unsafe fn alloc(capacity: usize) -> Self {
                 let (new_layout, new_offsets) = Self::layout_and_offsets(capacity);
                 let ptr = ::std::alloc::alloc(new_layout);
@@ -284,7 +273,7 @@ fn fields_struct(
             #[inline]
             unsafe fn dealloc(self, old_capacity: usize) {
                 let (layout, _) = Self::layout_and_offsets(old_capacity);
-                ::std::alloc::dealloc(self.as_ptr(), layout);
+                ::std::alloc::dealloc(self.#ident_head.as_ptr() as *mut u8, layout);
             }
 
             #[inline]
@@ -349,10 +338,6 @@ fn zst_struct(ident: Ident, vis: Visibility, kind: ZstKind) -> Result<TokenStrea
 
             #[inline]
             fn dangling() -> Self { Self }
-            #[inline]
-            fn as_ptr(self) -> *mut u8 { ::std::ptr::null::<u8>() as *mut _ }
-            #[inline]
-            unsafe fn from_parts(ptr: *mut u8, capacity: usize) -> Self { Self }
             #[inline]
             unsafe fn alloc(capacity: usize) -> Self { Self }
             #[inline]
