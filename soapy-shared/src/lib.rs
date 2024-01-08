@@ -2,6 +2,11 @@ pub trait Soapy: Sized {
     type RawSoa: RawSoa<Self>;
 }
 
+pub struct Field {
+    pub size: usize,
+    pub alignment: usize,
+}
+
 /// A low-level utility providing fundamental operations needed by `Soa<T>`
 ///
 /// In particular, it manages an allocation and a set of pointers into
@@ -22,7 +27,9 @@ pub trait Soapy: Sized {
 /// made, or
 /// - the same value as was used for `new_capacity` in previous calls
 /// to [`RawSoa::realloc_grow`] and [`RawSoa::realloc_shrink`]
-pub trait RawSoa<T>: Copy + Clone {
+pub unsafe trait RawSoa<T>: Copy + Clone {
+    const FIELDS: &'static [Field];
+
     /// For each field with type `F` in `T`, `Ref` has a field with type
     /// `&F`
     type Ref<'a>

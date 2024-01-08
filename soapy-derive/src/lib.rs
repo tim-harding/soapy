@@ -218,7 +218,16 @@ fn fields_struct(
         }
 
         #[automatically_derived]
-        impl ::soapy_shared::RawSoa<#ident> for #raw {
+        unsafe impl ::soapy_shared::RawSoa<#ident> for #raw {
+            const FIELDS: &'static [::soapy_shared::Field] = &[
+                #(
+                ::soapy_shared::Field {
+                    size: ::std::mem::size_of::<#ty_all>(),
+                    alignment: ::std::mem::align_of::<#ty_all>(),
+                },
+                )*
+            ];
+
             type Ref<'a> = #item_ref<'a> where Self: 'a;
             type RefMut<'a> = #item_ref_mut<'a> where Self: 'a;
 
@@ -332,7 +341,9 @@ fn zst_struct(ident: Ident, vis: Visibility, kind: ZstKind) -> Result<TokenStrea
         #vis struct #raw;
 
         #[automatically_derived]
-        impl ::soapy_shared::RawSoa<#ident> for #raw {
+        unsafe impl ::soapy_shared::RawSoa<#ident> for #raw {
+            const FIELDS: &'static [::soapy_shared::Field] = &[];
+
             type Ref<'a> = #ident;
             type RefMut<'a> = #ident;
 
