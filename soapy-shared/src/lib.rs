@@ -1,7 +1,7 @@
-use std::alloc::{Layout, LayoutError};
+use std::{alloc::{Layout, LayoutError}, ptr::Pointee};
 
 pub trait Soapy: Sized {
-    type SoaSlice: SoaSlice<Self>;
+    type SoaSlice: SoaSlice<Self> + ?Sized + <Self::SoaSlice as Pointee>::Metadata == usize;
 }
 
 /// A low-level utility providing fundamental operations needed by `Soa<T>`
@@ -24,7 +24,7 @@ pub trait Soapy: Sized {
 /// made, or
 /// - the same value as was used for `new_capacity` in previous calls
 /// to [`RawSoa::realloc_grow`] and [`RawSoa::realloc_shrink`]
-pub unsafe trait SoaSlice<T>: Copy + Clone {
+pub unsafe trait SoaSlice<T> where <Self as Pointee>::Metadata == usize {
     /// For each field with type `F` in `T`, `Ref` has a field with type
     /// `&F`
     type Ref<'a>
@@ -37,6 +37,8 @@ pub unsafe trait SoaSlice<T>: Copy + Clone {
     where
         Self: 'a;
 
+    /// Gets the layout and offsets to the arrays from the beginning of an
+    /// allocation made with this layout.
     fn layout_and_offsets(capacity: usize) -> Result<(Layout, &'static [usize]), LayoutError>;
 
     /// Copies `count` elements from `src` index to `dst` index in each of the

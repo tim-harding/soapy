@@ -1,6 +1,7 @@
+use crate::{IntoIter, Iter, IterMut};
 use soapy_shared::{SoaSlice, Soapy};
 use std::{
-    alloc::{alloc, handle_alloc_error, Layout},
+    alloc::{alloc, dealloc, handle_alloc_error, realloc, Layout, LayoutError},
     cmp::Ordering,
     fmt::{self, Formatter},
     marker::PhantomData,
@@ -9,13 +10,12 @@ use std::{
     ptr::NonNull,
 };
 
-use crate::{IntoIter, Iter, IterMut};
-
 pub struct Soa<T>
 where
     T: Soapy,
 {
-    pub(crate) cap: usize,
+    pub(crate) length: usize,
+    pub(crate) capacity: usize,
     pub(crate) raw: NonNull<T::SoaSlice>,
 }
 
@@ -28,19 +28,114 @@ where
 {
     const SMALL_CAPACITY: usize = 4;
 
+    fn layout_and_offsets(capacity: usize) -> Result<(Layout, &'static [usize]), LayoutError> {
+        <T::SoaSlice as SoaSlice<T>>::layout_and_offsets(capacity)
+    }
+
+    unsafe fn set_array_pointers(ptr: *mut u8, offsets: &[usize]) {
+        for (i, &offset) in offsets.iter().enumerate() {
+            let array_ptr = ptr.cast::<NonNull<u8>>().add(i).as_mut().unwrap_unchecked();
+            *array_ptr = NonNull::new_unchecked(ptr.add(offset));
+        }
+    }
+
     fn alloc(capacity: usize) -> NonNull<T::SoaSlice> {
-        let (layout, offsets) = <T::SoaSlice as SoaSlice<T>>::layout_and_offsets(capacity).unwrap();
+        debug_assert_ne!(size_of::<T>(), 0);
+        let (layout, offsets) = Self::layout_and_offsets(capacity).unwrap();
+
         let ptr = unsafe { alloc(layout) };
         if ptr.is_null() {
             handle_alloc_error(layout);
         }
-        for (i, &offset) in offsets.into_iter().enumerate() {
+
+        unsafe {
+            Self::set_array_pointers(ptr, offsets);
+            let slice = std::slice::from_raw_parts_mut(ptr, 0);
+            let ptr = slice as *mut [u8] as *mut T::SoaSlice;
+            NonNull::new_unchecked(ptr)
+        }
+    }
+
+    fn realloc_grow(&mut self, new_capacity: usize) {
+        debug_assert_ne!(size_of::<T>(), 0);
+        debug_assert!(new_capacity > self.capacity);
+        debug_assert_ne!(self.capacity, 0);
+
+        // SAFETY: We have already constructed this layout successfully for a
+        // previous allocation
+        let (old_layout, old_offsets) =
+            unsafe { Self::layout_and_offsets(self.capacity).unwrap_unchecked() };
+        let (new_layout, new_offsets) = Self::layout_and_offsets(new_capacity).unwrap();
+        debug_assert_eq!(new_offsets.len(), old_offsets.len());
+
+        // Grow allocation first
+        let ptr = self.raw.as_ptr() as *mut u8;
+        let ptr = unsafe { realloc(ptr, old_layout, new_layout.size()) };
+        if ptr.is_null() {
+            handle_alloc_error(new_layout);
+        }
+
+        // Copy to destination in reverse order to avoid overwriting data
+        for (i, (&new_offset, &old_offset)) in
+            new_offsets.iter().zip(old_offsets.iter()).enumerate().rev()
+        {
             unsafe {
-                *(ptr as *mut NonNull<u8>).add(i).as_mut().unwrap_unchecked() =
-                    NonNull::new_unchecked(ptr.add(offset));
+                let src = ptr.add(old_offset);
+                let dst = ptr.add(new_offset);
+                src.copy_to(dst, self.length);
+                // Update array pointer
+                *ptr.cast::<NonNull<u8>>().add(i).as_mut().unwrap_unchecked() =
+                    NonNull::new_unchecked(dst);
             }
         }
-        unsafe { NonNull::new_unchecked(ptr as *mut T::SoaSlice) }
+
+        self.raw = unsafe { NonNull::new_unchecked(ptr as *mut T::SoaSlice) };
+        self.capacity = new_capacity;
+    }
+
+    fn realloc_shrink(&mut self, new_capacity: usize) {
+        debug_assert_ne!(size_of::<T>(), 0);
+        debug_assert!(new_capacity < self.capacity);
+        debug_assert_ne!(new_capacity, 0);
+
+        // SAFETY: We have already constructed this layout successfully for a
+        // previous allocation
+        let (old_layout, _) = unsafe { Self::layout_and_offsets(self.capacity).unwrap_unchecked() };
+        let (new_layout, new_offsets) = Self::layout_and_offsets(new_capacity).unwrap();
+
+        // Move data before reallocating as some data may be past the end of the
+        // new allocation. Copy from front to back to avoid overwriting data.
+        let ptr = self.raw.as_ptr() as *mut u8;
+        for (i, &new_offset) in new_offsets.iter().enumerate() {
+            unsafe {
+                let src = *self.raw.as_ptr().cast::<NonNull<u8>>().add(i);
+                let dst = ptr.add(new_offset);
+                src.as_ptr().copy_to(dst, self.length);
+                // Can't set the new array pointers here like we can in
+                // realloc_grow because the pointer might move during realloc
+            }
+        }
+
+        let ptr = unsafe { ::std::alloc::realloc(ptr, old_layout, new_layout.size()) };
+        if ptr.is_null() {
+            handle_alloc_error(new_layout);
+        }
+
+        unsafe {
+            Self::set_array_pointers(ptr, new_offsets);
+        }
+
+        self.raw = unsafe { NonNull::new_unchecked(ptr as *mut T::SoaSlice) };
+        self.capacity = new_capacity;
+    }
+
+    fn dealloc(&mut self) {
+        debug_assert_ne!(size_of::<T>(), 0);
+        debug_assert!(self.capacity > 0);
+        let (layout, _) = <T::SoaSlice as SoaSlice<T>>::layout_and_offsets(self.capacity).unwrap();
+        unsafe { dealloc(self.raw.as_ptr() as *mut u8, layout) };
+        self.capacity = 0;
+        self.raw = NonNull::dangling();
     }
 
     /// Constructs a new, empty `Soa<T>`.
@@ -48,7 +143,8 @@ where
     /// The container will not allocate until elements are pushed onto it.
     pub fn new() -> Self {
         Self {
-            cap: if size_of::<T>() == 0 { usize::MAX } else { 0 },
+            length: 0,
+            capacity: if size_of::<T>() == 0 { usize::MAX } else { 0 },
             raw: NonNull::dangling(),
         }
     }
@@ -67,12 +163,14 @@ where
             capacity => {
                 if size_of::<T>() == 0 {
                     Self {
-                        cap: usize::MAX,
+                        length: 0,
+                        capacity: usize::MAX,
                         raw: NonNull::dangling(),
                     }
                 } else {
                     Self {
-                        cap: capacity,
+                        length: 0,
+                        capacity,
                         raw: Self::alloc(capacity),
                     }
                 }
@@ -83,37 +181,37 @@ where
     /// Returns the number of elements in the vector, also referred to as its
     /// length.
     pub fn len(&self) -> usize {
-        self.len
+        self.length
     }
 
     /// Returns true if the container contains no elements.
     pub fn is_empty(&self) -> bool {
-        self.len == 0
+        self.length == 0
     }
 
     /// Returns the total number of elements the container can hold without
     /// reallocating.
     pub fn capacity(&self) -> usize {
-        self.cap
+        self.capacity
     }
 
     /// Appends an element to the back of a collection.
     pub fn push(&mut self, element: T) {
         self.maybe_grow();
         unsafe {
-            self.raw.set(self.len, element);
+            self.raw.as_mut().set(self.length, element);
         }
-        self.len += 1;
+        self.length += 1;
     }
 
     /// Removes the last element from a vector and returns it, or [`None`] if it
     /// is empty.
     pub fn pop(&mut self) -> Option<T> {
-        if self.len == 0 {
+        if self.length == 0 {
             None
         } else {
-            self.len -= 1;
-            Some(unsafe { self.raw.get(self.len) })
+            self.length -= 1;
+            Some(unsafe { self.raw.as_mut().get(self.length) })
         }
     }
 
@@ -124,25 +222,27 @@ where
     ///
     /// Panics if `index > len`
     pub fn insert(&mut self, index: usize, element: T) {
-        assert!(index <= self.len, "index out of bounds");
+        assert!(index <= self.length, "index out of bounds");
         self.maybe_grow();
         unsafe {
-            self.raw.copy(index, index + 1, self.len - index);
-            self.raw.set(index, element);
+            let raw = self.raw.as_mut();
+            raw.copy(index, index + 1, self.length - index);
+            raw.set(index, element);
         }
-        self.len += 1;
+        self.length += 1;
     }
 
     /// Removes and returns the element at position index within the vector,
     /// shifting all elements after it to the left.
     pub fn remove(&mut self, index: usize) -> T {
-        assert!(index < self.len, "index out of bounds");
-        self.len -= 1;
-        let out = unsafe { self.raw.get(index) };
+        assert!(index < self.length, "index out of bounds");
+        self.length -= 1;
         unsafe {
-            self.raw.copy(index + 1, index, self.len - index);
+            let raw = self.raw.as_mut();
+            let out = raw.get(index);
+            raw.copy(index + 1, index, self.length - index);
+            out
         }
-        out
     }
 
     /// Reserves capacity for at least additional more elements to be inserted
@@ -154,11 +254,11 @@ where
         if additional == 0 {
             return;
         }
-        let new_cap = (self.len + additional)
+        let new_capacity = (self.length + additional)
             // Ensure exponential growth
-            .max(self.cap * 2)
+            .max(self.capacity * 2)
             .max(Self::SMALL_CAPACITY);
-        self.grow(new_cap);
+        self.grow(new_capacity);
     }
 
     /// Reserves the minimum capacity for at least additional more elements to
@@ -171,13 +271,13 @@ where
         if additional == 0 {
             return;
         }
-        let new_cap = (additional + self.len).max(self.cap);
-        self.grow(new_cap);
+        let new_capacity = (additional + self.length).max(self.capacity);
+        self.grow(new_capacity);
     }
 
     /// Shrinks the capacity of the container as much as possible.
     pub fn shrink_to_fit(&mut self) {
-        self.shrink(self.len);
+        self.shrink(self.length);
     }
 
     /// Shrinks the capacity of the vector with a lower bound.
@@ -186,9 +286,9 @@ where
     /// supplied value. If the current capacity is less than the lower limit,
     /// this is a no-op.
     pub fn shrink_to(&mut self, min_capacity: usize) {
-        let new_cap = self.len.max(min_capacity);
-        if new_cap < self.cap {
-            self.shrink(new_cap);
+        let new_capacity = self.length.max(min_capacity);
+        if new_capacity < self.capacity {
+            self.shrink(new_capacity);
         }
     }
 
@@ -198,7 +298,7 @@ where
     /// effect. Note that this method has no effect on the allocated capacity of
     /// the vector.
     pub fn truncate(&mut self, len: usize) {
-        while len < self.len {
+        while len < self.length {
             self.pop();
         }
     }
@@ -213,21 +313,22 @@ where
     ///
     /// Panics if index is out of bounds.
     pub fn swap_remove(&mut self, index: usize) -> T {
-        let out = unsafe { self.raw.get(index) };
-        let last = unsafe { self.raw.get(self.len - 1) };
         unsafe {
-            self.raw.set(index, last);
+            let raw = self.raw.as_mut();
+            let out = unsafe { raw.get(index) };
+            let last = unsafe { raw.get(self.length - 1) };
+            raw.set(index, last);
+            out
         }
-        out
     }
 
     /// Moves all the elements of other into self, leaving other empty.
     pub fn append(&mut self, other: &mut Self) {
-        for i in 0..other.len {
-            let element = unsafe { other.raw.get(i) };
+        for i in 0..other.length {
+            let element = unsafe { other.raw.as_mut().get(i) };
             self.push(element);
         }
-        other.len = 0;
+        other.length = 0;
     }
 
     /// Returns an iterator over the elements.
@@ -237,7 +338,7 @@ where
         Iter {
             raw: self.raw,
             start: 0,
-            end: self.len,
+            end: self.length,
             _marker: PhantomData,
         }
     }
@@ -249,7 +350,7 @@ where
         IterMut {
             raw: self.raw,
             start: 0,
-            end: self.len,
+            end: self.length,
             _marker: PhantomData,
         }
     }
@@ -259,11 +360,11 @@ where
         F: FnMut(B, &T) -> ControlFlow<B, B>,
     {
         let mut acc = init;
-        for i in 0..self.len {
+        for i in 0..self.length {
             // SAFETY:
             // Okay to construct an element and take its reference, so long as
             // we don't run its destructor.
-            let element = ManuallyDrop::new(unsafe { self.raw.get(i) });
+            let element = ManuallyDrop::new(unsafe { self.raw.as_mut().get(i) });
             let result = f(acc, &element);
             match result {
                 ControlFlow::Continue(b) => acc = b,
@@ -279,13 +380,13 @@ where
         F: FnMut(B, &T, &O) -> ControlFlow<B, B>,
     {
         let mut acc = init;
-        let len = self.len.min(other.len);
+        let len = self.length.min(other.length);
         for i in 0..len {
             // SAFETY:
             // Okay to construct an element and take its reference, so long as
             // we don't run its destructor.
-            let a = ManuallyDrop::new(unsafe { self.raw.get(i) });
-            let b = ManuallyDrop::new(unsafe { other.raw.get(i) });
+            let a = ManuallyDrop::new(unsafe { self.raw.as_mut().get(i) });
+            let b = ManuallyDrop::new(unsafe { other.raw.as_mut().get(i) });
             let result = f(acc, &a, &b);
             match result {
                 ControlFlow::Continue(b) => acc = b,
@@ -335,10 +436,10 @@ where
     where
         T: Clone,
     {
-        if index >= self.len {
+        if index >= self.length {
             panic!("index out of bounds");
         }
-        let el = ManuallyDrop::new(unsafe { self.raw.get(index) });
+        let el = ManuallyDrop::new(unsafe { self.raw.as_mut().get(index) });
         el.deref().clone()
     }
 
@@ -348,10 +449,10 @@ where
     ///
     /// Panics if `index >= len`.
     pub fn nth(&self, index: usize) -> <T::SoaSlice as SoaSlice<T>>::Ref<'_> {
-        if index >= self.len {
+        if index >= self.length {
             panic!("index out of bounds");
         }
-        unsafe { self.raw.get_ref(index) }
+        unsafe { self.raw.as_mut().get_ref(index) }
     }
 
     /// Returns a reference to the element at the given index.
@@ -360,10 +461,10 @@ where
     ///
     /// Panics if `index >= len`.
     pub fn nth_mut(&mut self, index: usize) -> <T::SoaSlice as SoaSlice<T>>::RefMut<'_> {
-        if index >= self.len {
+        if index >= self.length {
             panic!("index out of bounds");
         }
-        unsafe { self.raw.get_mut(index) }
+        unsafe { self.raw.as_mut().get_mut(index) }
     }
 
     /// Swaps the position of two elements.
@@ -372,69 +473,57 @@ where
     ///
     /// Panics if `a` or `b` is out of bounds.
     pub fn swap(&mut self, a: usize, b: usize) {
-        if a >= self.len || b >= self.len {
+        if a >= self.length || b >= self.length {
             panic!("index out of bounds");
         }
 
         unsafe {
-            let tmp = self.raw.get(a);
-            self.raw.copy(b, a, 1);
-            self.raw.set(b, tmp);
+            let raw = self.raw.as_mut();
+            let tmp = raw.get(a);
+            raw.copy(b, a, 1);
+            raw.set(b, tmp);
         }
     }
 
     /// Grows the allocated capacity if `len == cap`.
     fn maybe_grow(&mut self) {
-        if self.len < self.cap {
+        if self.length < self.capacity {
             return;
         }
-        let new_cap = match self.cap {
+        let new_capacity = match self.capacity {
             0 => Self::SMALL_CAPACITY,
             old_cap => old_cap * 2,
         };
-        self.grow(new_cap);
+        self.grow(new_capacity);
     }
 
     // Shrinks the allocated capacity.
-    fn shrink(&mut self, new_cap: usize) {
-        debug_assert!(new_cap <= self.cap);
-        if self.cap == 0 || new_cap == self.cap || size_of::<T>() == 0 {
+    fn shrink(&mut self, new_capacity: usize) {
+        debug_assert!(new_capacity <= self.capacity);
+        if self.capacity == 0 || new_capacity == self.capacity || size_of::<T>() == 0 {
             return;
         }
 
-        if new_cap == 0 {
-            debug_assert!(self.cap > 0);
-            unsafe {
-                self.raw.dealloc(self.cap);
-            }
-            self.raw = T::RawSoa::dangling();
+        if new_capacity == 0 {
+            self.dealloc();
         } else {
-            debug_assert!(new_cap < self.cap);
-            debug_assert!(self.len <= new_cap);
-            unsafe {
-                self.raw.realloc_shrink(self.cap, new_cap, self.len);
-            }
+            self.realloc_shrink(new_capacity);
         }
-
-        self.cap = new_cap;
     }
 
     /// Grows the allocated capacity.
-    fn grow(&mut self, new_cap: usize) {
-        debug_assert!(size_of::<T>() > 0);
-        debug_assert!(new_cap > self.cap);
-
-        if self.cap == 0 {
-            debug_assert!(new_cap > 0);
-            self.raw = unsafe { T::RawSoa::alloc(new_cap) };
-        } else {
-            debug_assert!(self.len <= self.cap);
-            unsafe {
-                self.raw.realloc_grow(self.cap, new_cap, self.len);
-            }
+    fn grow(&mut self, new_capacity: usize) {
+        debug_assert!(new_capacity > self.capacity);
+        if size_of::<T>() == 0 {
+            return;
         }
 
-        self.cap = new_cap;
+        if self.capacity == 0 {
+            self.raw = Self::alloc(new_capacity);
+            self.capacity = new_capacity;
+        } else {
+            self.realloc_grow(new_capacity);
+        }
     }
 }
 
@@ -444,10 +533,8 @@ where
 {
     fn drop(&mut self) {
         while self.pop().is_some() {}
-        if size_of::<T>() > 0 && self.cap > 0 {
-            unsafe {
-                self.raw.dealloc(self.cap);
-            }
+        if size_of::<T>() > 0 && self.capacity > 0 {
+            self.dealloc();
         }
     }
 }
@@ -464,8 +551,8 @@ where
         // Make sure not to drop self and free the buffer
         let soa = ManuallyDrop::new(self);
 
-        let len = soa.len;
-        let cap = soa.cap;
+        let len = soa.length;
+        let cap = soa.capacity;
         let raw = soa.raw;
 
         IntoIter {
@@ -491,8 +578,8 @@ where
 
     fn clone_from(&mut self, source: &Self) {
         self.clear();
-        if self.cap < source.len {
-            self.reserve(source.len);
+        if self.capacity < source.length {
+            self.reserve(source.length);
         }
         source.for_each(|el| {
             self.push(el.clone());
@@ -582,7 +669,7 @@ where
     T: Soapy + PartialEq,
 {
     fn eq(&self, other: &Self) -> bool {
-        if self.len != other.len {
+        if self.length != other.length {
             return false;
         }
 
@@ -624,7 +711,7 @@ where
         });
         match element_wise {
             ord @ (None | Some(Ordering::Less | Ordering::Greater)) => ord,
-            Some(Ordering::Equal) => Some(self.len.cmp(&other.len)),
+            Some(Ordering::Equal) => Some(self.length.cmp(&other.length)),
         }
     }
 }
@@ -640,7 +727,7 @@ where
         });
         match element_wise {
             ord @ (Ordering::Less | Ordering::Greater) => ord,
-            Ordering::Equal => self.len.cmp(&other.len),
+            Ordering::Equal => self.length.cmp(&other.length),
         }
     }
 }
@@ -659,55 +746,7 @@ where
     T: Soapy + std::hash::Hash,
 {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.len.hash(state);
+        self.length.hash(state);
         self.for_each(|item| item.hash(state));
     }
 }
-
-// #[inline]
-// unsafe fn alloc(capacity: usize) -> Self {
-//     let (new_layout, new_offsets) = Self::layout_and_offsets(capacity);
-//     let ptr = ::std::alloc::alloc(new_layout);
-//     assert_ne!(ptr as *const u8, ::std::ptr::null());
-//     Self::with_offsets(ptr, new_offsets)
-// }
-//
-// #[inline]
-// unsafe fn realloc_grow(&mut self, old_capacity: usize, new_capacity: usize, length: usize) {
-//     let (new_layout, new_offsets) = Self::layout_and_offsets(new_capacity);
-//     let (old_layout, old_offsets) = Self::layout_and_offsets(old_capacity);
-//     // Grow allocation first
-//     let ptr = self.#ident_head.as_ptr() as *mut u8;
-//     let ptr = ::std::alloc::realloc(ptr, old_layout, new_layout.size());
-//     assert_ne!(ptr as *const u8, ::std::ptr::null());
-//     // Pointer may have moved, can't reuse self
-//     let old = Self::with_offsets(ptr, old_offsets);
-//     let new = Self::with_offsets(ptr, new_offsets);
-//     // Copy do destination in reverse order to avoid
-//     // overwriting data
-//     #(::std::ptr::copy(old.#ident_rev.as_ptr(), new.#ident_rev.as_ptr(), length);)*
-//     *self = new;
-// }
-//
-// #[inline]
-// unsafe fn realloc_shrink(&mut self, old_capacity: usize, new_capacity: usize, length: usize) {
-//     let (old_layout, _) = Self::layout_and_offsets(old_capacity);
-//     let (new_layout, new_offsets) = Self::layout_and_offsets(new_capacity);
-//     // Move data before reallocating as some data
-//     // may be past the end of the new allocation.
-//     // Copy from front to back to avoid overwriting data.
-//     let ptr = self.#ident_head.as_ptr() as *mut u8;
-//     let dst = Self::with_offsets(ptr, new_offsets);
-//     #(::std::ptr::copy(self.#ident_all.as_ptr(), dst.#ident_all.as_ptr(), length);)*
-//     let ptr = ::std::alloc::realloc(ptr, old_layout, new_layout.size());
-//     assert_ne!(ptr as *const u8, ::std::ptr::null());
-//     // Pointer may have moved, can't reuse dst
-//     *self = Self::with_offsets(ptr, new_offsets);
-// }
-//
-// #[inline]
-// unsafe fn dealloc(self, old_capacity: usize) {
-//     let (layout, _) = Self::layout_and_offsets(old_capacity);
-//     ::std::alloc::dealloc(self.#ident_head.as_ptr() as *mut u8, layout);
-// }
-//

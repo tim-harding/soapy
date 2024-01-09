@@ -125,7 +125,6 @@ fn fields_struct(
         }
 
         #[automatically_derived]
-        #[derive(Copy, Clone)]
         #vis struct #slice #slice_body
 
         #[automatically_derived]
@@ -145,12 +144,13 @@ fn fields_struct(
                 // First tail_len fields are pointers into the allocation
                 let layout = ::std::alloc::Layout::array::<::std::ptr::NonNull<u8>>(#tail_len)?;
 
-                // Don't need an offset for the first array
-                let array = ::std::alloc::Layout::array::<#ty_head>(cap)?;
+                // Don't need an offset for the first array as it will just be
+                // at self.#head_ident, the dynamically-sized field
+                let array = ::std::alloc::Layout::array::<#ty_head>(capacity)?;
                 let (layout, _) = layout.extend(array)?;
 
                 #(
-                    let array = ::std::alloc::Layout::array::<#ty_tail>(cap)?;
+                    let array = ::std::alloc::Layout::array::<#ty_tail>(capacity)?;
                     let (layout, #offset_vars) = layout.extend(array)?;
                 )*
 

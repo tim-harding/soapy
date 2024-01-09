@@ -1,11 +1,11 @@
 use soapy_shared::{SoaSlice, Soapy};
-use std::marker::PhantomData;
+use std::{marker::PhantomData, ptr::NonNull};
 
 pub struct Iter<'a, T: 'a>
 where
     T: Soapy,
 {
-    pub(crate) raw: T::SoaSlice,
+    pub(crate) raw: NonNull<T::SoaSlice>,
     pub(crate) start: usize,
     pub(crate) end: usize,
     pub(crate) _marker: PhantomData<&'a T>,
@@ -21,7 +21,7 @@ where
         if self.start >= self.end {
             None
         } else {
-            let out = unsafe { self.raw.get_ref(self.start) };
+            let out = unsafe { self.raw.as_mut().get_ref(self.start) };
             self.start += 1;
             Some(out)
         }
@@ -42,7 +42,7 @@ where
             None
         } else {
             self.end -= 1;
-            Some(unsafe { self.raw.get_ref(self.end) })
+            Some(unsafe { self.raw.as_mut().get_ref(self.end) })
         }
     }
 }

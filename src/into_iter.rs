@@ -1,11 +1,11 @@
 use soapy_shared::{SoaSlice, Soapy};
-use std::mem::size_of;
+use std::{mem::size_of, ptr::NonNull};
 
 pub struct IntoIter<T>
 where
     T: Soapy,
 {
-    pub(crate) raw: T::SoaSlice,
+    pub(crate) raw: NonNull<T::SoaSlice>,
     pub(crate) cap: usize,
     pub(crate) start: usize,
     pub(crate) end: usize,
@@ -21,7 +21,7 @@ where
         if self.start >= self.end {
             None
         } else {
-            let out = unsafe { self.raw.get(self.start) };
+            let out = unsafe { self.raw.as_mut().get(self.start) };
             self.start += 1;
             Some(out)
         }
@@ -42,7 +42,7 @@ where
             None
         } else {
             self.end -= 1;
-            Some(unsafe { self.raw.get(self.end) })
+            Some(unsafe { self.raw.as_mut().get(self.end) })
         }
     }
 }
@@ -55,7 +55,7 @@ where
         for _ in self.by_ref() {}
         if size_of::<T>() > 0 && self.cap > 0 {
             unsafe {
-                self.raw.dealloc(self.cap);
+                self.raw.as_mut().dealloc(self.cap);
             }
         }
     }
