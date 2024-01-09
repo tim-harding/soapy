@@ -1,5 +1,5 @@
 use soapy_shared::{SoaSlice, Soapy};
-use std::{mem::size_of, ptr::NonNull};
+use std::{alloc::dealloc, mem::size_of, ptr::NonNull};
 
 pub struct IntoIter<T>
 where
@@ -55,7 +55,9 @@ where
         for _ in self.by_ref() {}
         if size_of::<T>() > 0 && self.cap > 0 {
             unsafe {
-                self.raw.as_mut().dealloc(self.cap);
+                let (layout, _) =
+                    <T::SoaSlice as SoaSlice<T>>::layout_and_offsets(self.cap).unwrap();
+                dealloc(self.raw.as_ptr() as *mut u8, layout);
             }
         }
     }

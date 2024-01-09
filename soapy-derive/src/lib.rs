@@ -137,6 +137,11 @@ fn fields_struct(
             type Ref<'a> = #item_ref<'a> where Self: 'a;
             type RefMut<'a> = #item_ref_mut<'a> where Self: 'a;
 
+            unsafe fn from_ptr(ptr: *mut u8) -> *mut Self {
+                let slice = ::std::slice::from_raw_parts_mut(ptr, 0);
+                slice as *mut [u8] as *mut Self
+            }
+
             #[inline]
             fn layout_and_offsets(capacity: usize)
                 -> Result<(::std::alloc::Layout, &'static [usize]), ::std::alloc::LayoutError>
@@ -159,35 +164,41 @@ fn fields_struct(
 
             #[inline]
             unsafe fn copy(&mut self, src: usize, dst: usize, count: usize) {
+                let ptr = self.#ident_head.as_ptr().cast_mut();
+                ::std::ptr::copy(ptr.add(src), ptr.add(dst), count);
                 #(
-                    let ptr = self.#ident_all.as_ptr();
+                    let ptr = self.#ident_tail.as_ptr();
                     ::std::ptr::copy(ptr.add(src), ptr.add(dst), count);
                 )*
             }
 
             #[inline]
             unsafe fn set(&mut self, index: usize, element: #ident) {
-                #(self.#ident_all.as_ptr().add(index).write(element.#ident_all);)*
+                self.#ident_head.as_ptr().cast_mut().add(index).write(element.#ident_head);
+                #(self.#ident_tail.as_ptr().add(index).write(element.#ident_tail);)*
             }
 
             #[inline]
             unsafe fn get(&self, index: usize) -> #ident {
                 #ident {
-                    #(#ident_all: self.#ident_all.as_ptr().add(index).read(),)*
+                    #ident_head: self.#ident_head.as_ptr().cast_mut().add(index).read(),
+                    #(#ident_tail: self.#ident_tail.as_ptr().add(index).read(),)*
                 }
             }
 
             #[inline]
             unsafe fn get_ref<'a>(&self, index: usize) -> #item_ref<'a> {
                 #item_ref {
-                    #(#ident_all: self.#ident_all.as_ptr().add(index).as_ref().unwrap_unchecked(),)*
+                    #ident_head: self.#ident_head.as_ptr().cast_mut().add(index).as_ref().unwrap_unchecked(),
+                    #(#ident_tail: self.#ident_tail.as_ptr().add(index).as_ref().unwrap_unchecked(),)*
                 }
             }
 
             #[inline]
             unsafe fn get_mut<'a>(&self, index: usize) -> #item_ref_mut<'a> {
                 #item_ref_mut {
-                    #(#ident_all: self.#ident_all.as_ptr().add(index).as_mut().unwrap_unchecked(),)*
+                    #ident_head: self.#ident_head.as_ptr().cast_mut().add(index).as_mut().unwrap_unchecked(),
+                    #(#ident_tail: self.#ident_tail.as_ptr().add(index).as_mut().unwrap_unchecked(),)*
                 }
             }
         }
@@ -237,6 +248,7 @@ fn zst_struct(ident: Ident, vis: Visibility, kind: ZstKind) -> Result<TokenStrea
             unsafe fn get_ref<'a>(&self, index: usize) -> Self::Ref<'a> { #ident #unit_construct }
             #[inline]
             unsafe fn get_mut<'a>(&self, index: usize) -> Self::RefMut<'a> { #ident #unit_construct }
+            unsafe fn from_ptr(ptr: *mut u8) -> *mut Self { ::std::ptr::null() }
         }
     })
 }

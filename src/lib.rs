@@ -1,5 +1,3 @@
-#![feature(ptr_metadata)]
-
 //! Soapy makes it simple to work with structure-of-arrays memory layout. What `Vec<T>`
 //! is to array-of-structures (AoS), `Soa<T>` is to structure-of-arrays (SoA).
 //!

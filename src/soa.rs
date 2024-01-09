@@ -50,9 +50,9 @@ where
 
         unsafe {
             Self::set_array_pointers(ptr, offsets);
-            let slice = std::slice::from_raw_parts_mut(ptr, 0);
-            let ptr = slice as *mut [u8] as *mut T::SoaSlice;
-            NonNull::new_unchecked(ptr)
+            // let slice = std::slice::from_raw_parts_mut(ptr, 0);
+            // let ptr = slice as *mut [u8] as *mut T::SoaSlice;
+            NonNull::new_unchecked(<T::SoaSlice as SoaSlice<T>>::from_ptr(ptr))
         }
     }
 
@@ -89,7 +89,7 @@ where
             }
         }
 
-        self.raw = unsafe { NonNull::new_unchecked(ptr as *mut T::SoaSlice) };
+        self.raw = unsafe { NonNull::new_unchecked(<T::SoaSlice as SoaSlice<T>>::from_ptr(ptr)) };
         self.capacity = new_capacity;
     }
 
@@ -125,7 +125,7 @@ where
             Self::set_array_pointers(ptr, new_offsets);
         }
 
-        self.raw = unsafe { NonNull::new_unchecked(ptr as *mut T::SoaSlice) };
+        self.raw = unsafe { NonNull::new_unchecked(<T::SoaSlice as SoaSlice<T>>::from_ptr(ptr)) };
         self.capacity = new_capacity;
     }
 
